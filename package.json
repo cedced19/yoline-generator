@@ -1,0 +1,44 @@
+{
+  "name": "yoline-generator",
+  "description": "Yoline' blog generator",
+  "version": "0.0.0",
+  "author": "Cédric <cedced19@gmail.com>",
+  "keywords": [
+    "yoline",
+    "framework",
+    "blog",
+    "web",
+    "router",
+    "app"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "2.7.1",
+    "mkdirp": "0.5.1",
+    "readline-sync": "^1.3.1",
+    "rimraf": "~2.2.8",
+    "simple-git": "^1.22.0",
+    "sorted-object": "1.0.0"
+  },
+  "main": "bin/yoline",
+  "preferGlobal": true,
+  "bin": {
+    "yoline": "./bin/yoline"
+  },
+  "devDependencies": {
+    "mocha": "2.2.5"
+  },
+  "engines": {
+    "node": ">= 0.12"
+  },
+  "files": [
+    "LICENSE",
+    "bin/",
+    "src/",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "test": "mocha"
+  }
+}

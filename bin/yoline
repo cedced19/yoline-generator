@@ -1,0 +1,282 @@
+#!/usr/bin/env node
+
+var program = require('commander');
+var mkdirp = require('mkdirp');
+var os = require('os');
+var fs = require('fs');
+var path = require('path');
+var readline = require('readline');
+var sortedObject = require('sorted-object');
+var simpleGit = require('simple-git');
+var rimraf = require('rimraf');
+var readlineSync = require('readline-sync');
+
+var _exit = process.exit;
+var eol = os.EOL;
+var pkg = require('../package.json');
+
+var version = pkg.version;
+
+// Re-assign process.exit because of commander
+// TODO: Switch to a different command framework
+process.exit = exit;
+
+// CLI
+
+before(program, 'outputHelp', function () {
+  this.allowUnknownOption();
+});
+
+program
+  .version(version)
+  .usage('[options] [dir]')
+  .option('-f, --force', 'force on non-empty directory')
+  .parse(process.argv);
+
+if (!exit.exited) {
+  main();
+}
+
+/**
+ * Install a before function; AOP.
+ */
+
+function before(obj, method, fn) {
+  var old = obj[method];
+
+  obj[method] = function () {
+    fn.call(this);
+    old.apply(this, arguments);
+  };
+}
+
+/**
+ * Prompt for confirmation on STDOUT/STDIN
+ */
+
+function confirm(msg, callback) {
+  var rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  rl.question(msg, function (input) {
+    rl.close();
+    callback(/^y|yes|ok|true$/i.test(input));
+  });
+}
+
+/**
+ * Create application at the given directory `path`.
+ *
+ * @param {String} path
+ */
+function createApplication(appName, path) {
+  var wait = 5;
+
+  console.log();
+  function complete() {
+    if (--wait) return;
+    var prompt = launchedFromCmd() ? '>' : '$';
+      
+    console.log();
+    console.log('   install dependencies:');
+    console.log('     %s cd %s && npm install', prompt, path);
+    console.log();
+    console.log('   run the app:');
+  
+    if (launchedFromCmd()) {
+        console.log('     %s SET DEBUG=%s:* & npm start', prompt, appName);
+    } else {
+        console.log('     %s DEBUG=%s:* npm start', prompt, appName);
+    }
+  
+    console.log();
+  }
+  
+  mkdir(path, function(){
+    mkdir(path + '/media');
+    mkdir(path + '/content');
+    mkdir(path + '/public');
+    mkdir(path + '/public/javascripts');
+    mkdir(path + '/public/stylesheets', function(){
+      copyTemplate('public/stylesheets/styles.css', path + '/public/stylesheets/styles.css');
+      complete();
+    });
+    
+    mkdir(path + '/config', function(){
+      var meta = loadTemplate('meta.js'),
+          author = readlineSync.question('   \x1b[36mquestion\x1b[0m : what is your name? '),
+          twitter = readlineSync.question('   \x1b[36mquestion\x1b[0m : what is your twitter account? '),
+          title = readlineSync.question('   \x1b[36mquestion\x1b[0m : what is the title of the blog? '),
+          description = readlineSync.question('   \x1b[36mquestion\x1b[0m : please define a description. '),
+          url = readlineSync.question('   \x1b[36mquestion\x1b[0m : what is the url of the blog? '),
+          french = readlineSync.question('   \x1b[36mquestion\x1b[0m : do you use the french date format? [y/N] ');
+      if (/^y|yes|ok|true$/i.test(french)) {
+        french = true;
+      } else {
+        french = false;
+      }
+      meta = meta.replace('{author}', author)
+                 .replace('{twitter}', twitter.toLowerCase())
+                 .replace('{title}', title.charAt(0).toUpperCase() + title.substring(1).toLowerCase())
+                 .replace('{description}', description)
+                 .replace('{url}', url)
+                 .replace('{french}', french);
+      write(path + '/config/meta.js', meta);
+      complete();
+    });
+    
+    mkdir(path + '/lib', function(){
+      copyTemplate('lib/ls.js', path + '/lib/ls.js');
+      complete();
+    });
+
+    mkdir(path + '/templates', function(){
+      copyTemplate('templates/index.swig', path + '/templates/index.swig');
+      copyTemplate('templates/layout.swig', path + '/templates/layout.swig');
+      copyTemplate('templates/post.swig', path + '/templates/post.swig');
+      complete();
+    });
+
+    // package.json
+    var pkg = {
+        name: appName,
+        version: '0.0.0',
+        private: true,
+        scripts: { start: 'node yoline.js' },
+        dependencies: require('../tmp/package.json').dependencies
+    }
+
+    // sort dependencies like npm(1)
+    pkg.dependencies = sortedObject(pkg.dependencies);
+    copyTemplate('yoline.js', path + '/yoline.js');
+    copyTemplate('.gitignore', path + '/.gitignore');
+    write(path + '/package.json', JSON.stringify(pkg, null, 2));
+    complete();
+  });
+}
+
+function copyTemplate(from, to) {
+  from = path.join(__dirname, '..', 'tmp', from);
+  write(to, fs.readFileSync(from, 'utf-8'));
+}
+
+/**
+ * Check if the given directory `path` is empty.
+ *
+ * @param {String} path
+ * @param {Function} fn
+ */
+
+function emptyDirectory(path, fn) {
+  fs.readdir(path, function(err, files){
+    if (err && 'ENOENT' != err.code) throw err;
+    fn(!files || !files.length);
+  });
+}
+
+/**
+ * Graceful exit for async STDIO
+ */
+
+function exit(code) {
+  // flush output for Node.js Windows pipe bug
+  // https://github.com/joyent/node/issues/6247 is just one bug example
+  // https://github.com/visionmedia/mocha/issues/333 has a good discussion
+  function done() {
+    if (!(draining--)) _exit(code);
+  }
+
+  var draining = 0;
+  var streams = [process.stdout, process.stderr];
+
+  exit.exited = true;
+
+  streams.forEach(function(stream){
+    // submit empty write request and wait for completion
+    draining += 1;
+    stream.write('', done);
+  });
+
+  done();
+}
+
+/**
+ * Determine if launched from cmd.exe
+ */
+
+function launchedFromCmd() {
+  return process.platform === 'win32'
+    && process.env._ === undefined;
+}
+
+/**
+ * Load template file.
+ */
+
+function loadTemplate(name) {
+  return fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf-8');
+}
+
+/**
+ * Main program.
+ */
+
+function main() {
+  // Path
+  var destinationPath = program.args.shift() || '.';
+  var tempDir = path.join(__dirname, '..', 'tmp');
+  
+  mkdirp(tempDir, 0755, () => {
+    rimraf(tempDir, () => {
+      simpleGit().clone('https://github.com/cedced19/yoline-example', tempDir, () => {
+        // App name
+        var appName = path.basename(path.resolve(destinationPath));
+      
+        // Generate application
+        emptyDirectory(destinationPath, (empty) => {
+          if (empty || program.force) {
+            createApplication(appName, destinationPath);
+          } else {
+            confirm('   \x1b[31merror\x1b[39m : destination is not empty, continue? [y/N] ', (ok) => {
+              if (ok) {
+                createApplication(appName, destinationPath);
+              } else {
+                console.error('   \x1b[31merror\x1b[39m : aborting');
+                exit(1);
+              }
+            });
+          }
+        });
+      });
+    });
+  });
+}
+
+/**
+ * echo str > path.
+ *
+ * @param {String} path
+ * @param {String} str
+ */
+
+function write(path, str, mode) {
+  fs.writeFileSync(path, str, { mode: mode || 0666 });
+  console.log('   \x1b[36mcreate\x1b[0m : ' + path);
+}
+
+/**
+ * Mkdir -p.
+ *
+ * @param {String} path
+ * @param {Function} fn
+ */
+
+function mkdir(path, fn) {
+  mkdirp(path, 0755, (err) => {
+    if (err) throw err;
+    console.log('   \033[36mcreate\033[0m : ' + path);
+    fn && fn();
+  });
+}
