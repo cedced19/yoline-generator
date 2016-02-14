@@ -1,4 +1,8 @@
-# Yoline Cli
+# yoline-generator
+
+Yoline' blog generator
+
+[![Build Status](https://travis-ci.org/cedced19/yoline-generator.svg?branch=master)](https://travis-ci.org/cedced19/yoline-generator)
 
 A free and open-source blog based on Node.js.
 It is __the smallest__ of the blog we can do, and that's the goal!
